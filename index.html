@@ -9,7 +9,7 @@
 <style>
   /* ---------- BRANDING: edit these to match your company ---------- */
   :root {
-    --brand-primary: #1c3d5a;
+    --brand-primary: #547694;
     --brand-accent:  #d98c15;
     --brand-text:    #222;
   }
@@ -48,6 +48,16 @@
     flex-shrink: 0;
   }
   .top-details { flex: 1; }
+  .brand-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--brand-primary);
+  }
+  .brand-header img { height: 32px; width: auto; }
+  .brand-header span { font-weight: 600; color: var(--brand-primary); font-size: 15px; }
   .row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #eee; }
   .row span:first-child { color: #666; }
   .section-title { margin-top: 16px; font-weight: 600; color: var(--brand-primary); }
@@ -83,6 +93,7 @@
 </head>
 <body>
 
+<div class="brand-header"><img id="brand-logo" alt="Coriander Designs" style="display:none" /><span>Coriander Designs</span></div>
 <div id="debug-banner"></div>
 <div id="empty">Select a row in the Products table to preview it here.</div>
 <div id="content" style="display:none">
@@ -122,10 +133,36 @@
 </div>
 
 <script>
-const COMPANY_NAME = "Your Company Name";
+const COMPANY_NAME = "Coriander Designs";
 const COMPANY_TAGLINE = "Pricing Quote / Spec Sheet";
-// Optional: base64 logo data URI, e.g. "data:image/png;base64,iVBORw0..."
-const LOGO_DATA_URI = null;
+const LOGO_URL = "https://images.squarespace-cdn.com/content/v1/616eec89457ae94eaa52eddb/ce50f7c6-1c7c-49c3-ab8f-5c3f533c426b/Coriander+Logo+Dark+Blue+AMD.png?format=500w";
+
+let LOGO_DATA_URI = null; // populated once by loadLogo(), used both on-screen and in the PDF
+
+async function urlToDataUrl(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Failed to fetch ${url}`);
+  const blob = await response.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function loadLogo() {
+  try {
+    LOGO_DATA_URI = await urlToDataUrl(LOGO_URL);
+    const logoImg = document.getElementById('brand-logo');
+    logoImg.src = LOGO_DATA_URI;
+    logoImg.style.display = 'inline';
+  } catch (err) {
+    // Non-fatal: PDF will just skip the logo image if this fails (e.g. CORS block from the CDN)
+    console.warn('Could not load logo:', err.message);
+  }
+}
+loadLogo();
 
 let currentRecord = null;
 let materialsRows = [];
@@ -331,16 +368,26 @@ async function generatePDF(record) {
   let y = 50;
 
   // Header band
-  doc.setFillColor(28, 61, 90); // matches --brand-primary
+  doc.setFillColor(84, 118, 148); // matches --brand-primary (#547694)
   doc.rect(0, 0, pageWidth, 70, 'F');
+  let textStartX = margin;
   if (LOGO_DATA_URI) {
-    doc.addImage(LOGO_DATA_URI, 'PNG', margin, 15, 40, 40);
+    try {
+      const logoDims = await getImageDimensions(LOGO_DATA_URI);
+      const maxH = 40;
+      const scale = maxH / logoDims.height;
+      const w = logoDims.width * scale;
+      doc.addImage(LOGO_DATA_URI, formatFromDataUrl(LOGO_DATA_URI), margin, 15, w, maxH);
+      textStartX = margin + w + 12;
+    } catch (err) {
+      console.warn('Could not embed logo in PDF:', err.message);
+    }
   }
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(18);
-  doc.text(COMPANY_NAME, LOGO_DATA_URI ? margin + 50 : margin, 35);
+  doc.text(COMPANY_NAME, textStartX, 35);
   doc.setFontSize(10);
-  doc.text(COMPANY_TAGLINE, LOGO_DATA_URI ? margin + 50 : margin, 52);
+  doc.text(COMPANY_TAGLINE, textStartX, 52);
 
   // ---- Image (left) + product info / price (right) row ----
   y = 100;
@@ -416,7 +463,7 @@ async function generatePDF(record) {
       margin: { left: margin, right: margin },
       head: [['Material', 'Qty', 'Unit Cost', 'Ext. Cost']],
       body: materialsRows.map(m => [m.name, String(m.qty ?? ''), money(m.unitCost), money(m.extCost)]),
-      headStyles: { fillColor: [28, 61, 90] },
+      headStyles: { fillColor: [84, 118, 148] },
       styles: { fontSize: 9 },
       theme: 'grid',
     });
@@ -429,7 +476,7 @@ async function generatePDF(record) {
       margin: { left: margin, right: margin },
       head: [['Labor Category', 'Hours', 'Rate/hr', 'Ext. Cost']],
       body: laborRows.map(l => [l.category, String(l.hours ?? ''), money(l.rate), money(l.extCost)]),
-      headStyles: { fillColor: [28, 61, 90] },
+      headStyles: { fillColor: [84, 118, 148] },
       styles: { fontSize: 9 },
       theme: 'grid',
     });
