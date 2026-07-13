@@ -273,6 +273,11 @@ async function loadProductImage(record) {
     const rows = toRows(productsData);
     const row = rows.find(r => r.id === record.id);
     attachmentIds = row ? row.Image : undefined;
+    // grist.docApi.fetchTable returns raw encoded values; list-type columns
+    // (Attachments, RefList, ChoiceList) come back as ['L', id1, id2, ...].
+    if (Array.isArray(attachmentIds) && attachmentIds[0] === 'L') {
+      attachmentIds = attachmentIds.slice(1);
+    }
     console.log('Image attachment IDs (via fetchTable):', attachmentIds);
   } catch (err) {
     showDebug(`Could not read Image column: ${err.message}`);
