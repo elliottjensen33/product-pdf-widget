@@ -122,7 +122,7 @@
 </div>
 
 <script>
-const COMPANY_NAME = "Coriander Design";
+const COMPANY_NAME = "Your Company Name";
 const COMPANY_TAGLINE = "Pricing Quote / Spec Sheet";
 // Optional: base64 logo data URI, e.g. "data:image/png;base64,iVBORw0..."
 const LOGO_DATA_URI = null;
@@ -264,7 +264,19 @@ function renderPreview(record) {
 async function loadProductImage(record) {
   currentImageDataUrl = null;
   const wrap = document.getElementById('image-wrap');
-  const attachmentIds = record.Image; // array of attachment row IDs, or empty/undefined
+  let attachmentIds;
+
+  // Attachments-type columns are NOT included in the record object from grist.onRecord,
+  // even with full access. Pull the raw column data directly instead.
+  try {
+    const productsData = await grist.docApi.fetchTable('Products');
+    const rows = toRows(productsData);
+    const row = rows.find(r => r.id === record.id);
+    attachmentIds = row ? row.Image : undefined;
+    console.log('Image attachment IDs (via fetchTable):', attachmentIds);
+  } catch (err) {
+    showDebug(`Could not read Image column: ${err.message}`);
+  }
 
   if (!attachmentIds || attachmentIds.length === 0) {
     wrap.innerHTML = '<div class="no-image">No image</div>';
