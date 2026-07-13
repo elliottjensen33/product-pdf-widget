@@ -24,6 +24,30 @@
   }
   h2 { margin: 0 0 4px 0; color: var(--brand-primary); }
   .sub { color: #666; margin-bottom: 16px; }
+  .top-section { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
+  .top-section img {
+    width: 140px;
+    height: 140px;
+    object-fit: contain;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    background: #fafafa;
+    flex-shrink: 0;
+  }
+  .top-section .no-image {
+    width: 140px;
+    height: 140px;
+    border: 1px dashed #ccc;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #aaa;
+    font-size: 12px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .top-details { flex: 1; }
   .row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #eee; }
   .row span:first-child { color: #666; }
   .section-title { margin-top: 16px; font-weight: 600; color: var(--brand-primary); }
@@ -50,12 +74,17 @@
 
 <div id="empty">Select a row in the Products table to preview it here.</div>
 <div id="content" style="display:none">
-  <h2 id="p-name"></h2>
-  <div class="sub" id="p-id"></div>
+  <div class="top-section">
+    <div id="image-wrap"><div class="no-image">No image</div></div>
+    <div class="top-details">
+      <h2 id="p-name"></h2>
+      <div class="sub" id="p-id"></div>
+      <div class="row"><span>Category</span><span id="p-category"></span></div>
+      <div class="row"><span>Product Line</span><span id="p-line"></span></div>
+      <div class="row"><span>Status</span><span id="p-status"></span></div>
+    </div>
+  </div>
 
-  <div class="row"><span>Category</span><span id="p-category"></span></div>
-  <div class="row"><span>Product Line</span><span id="p-line"></span></div>
-  <div class="row"><span>Status</span><span id="p-status"></span></div>
   <div class="row"><span>Description</span><span id="p-desc"></span></div>
 
   <div class="section-title">Materials</div>
@@ -113,6 +142,40 @@ function money(n) {
   if (n === null || n === undefined || isNaN(n)) return "—";
   return "$" + Number(n).toFixed(2);
 }
+
+// Attachment (Image) columns store a list of attachment row IDs, not raw bytes.
+// Binary content requires a short-lived access token, then a normal authenticated fetch.
+async function getAttachmentDataUrl(attachmentId) {
+  const tokenInfo = await grist.docApi.getAccessToken({ readOnly: true });
+  const url = `${tokenInfo.baseUrl}/attachments/${attachmentId}/download?auth=${tokenInfo.token}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Failed to fetch attachment ${attachmentId}`);
+  const blob = await response.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result); // e.g. "data:image/png;base64,...."
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function getImageDimensions(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+// Grist attachment mime types (png/jpeg/etc.) become the jsPDF image format.
+function formatFromDataUrl(dataUrl) {
+  const match = dataUrl.match(/^data:image\/(\w+);/);
+  const type = match ? match[1].toUpperCase() : 'PNG';
+  return type === 'JPG' ? 'JPEG' : type;
+}
+
+let currentImageDataUrl = null; // cached for the currently selected record, used by both preview and PDF
 
 async function loadRelatedData(record) {
   const [pmData, plData, matData, laborRateData] = await Promise.all([
@@ -176,18 +239,43 @@ function renderPreview(record) {
   ).join('') || '<tr><td colspan="4" style="color:#999">No labor</td></tr>';
 }
 
+async function loadProductImage(record) {
+  currentImageDataUrl = null;
+  const wrap = document.getElementById('image-wrap');
+  const attachmentIds = record.Image; // array of attachment row IDs, or empty/undefined
+
+  if (!attachmentIds || attachmentIds.length === 0) {
+    wrap.innerHTML = '<div class="no-image">No image</div>';
+    return;
+  }
+
+  try {
+    const dataUrl = await getAttachmentDataUrl(attachmentIds[0]);
+    currentImageDataUrl = dataUrl;
+    wrap.innerHTML = `<img src="${dataUrl}" alt="Product image" />`;
+  } catch (err) {
+    console.error(err);
+    wrap.innerHTML = '<div class="no-image">Image failed to load</div>';
+  }
+}
+
 grist.onRecord(async (record) => {
   currentRecord = record;
-  await loadRelatedData(record);
+  await Promise.all([loadRelatedData(record), loadProductImage(record)]);
   renderPreview(record);
 });
 
-document.getElementById('export-btn').addEventListener('click', () => {
+document.getElementById('export-btn').addEventListener('click', async () => {
   if (!currentRecord) return;
-  generatePDF(currentRecord);
+  try {
+    await generatePDF(currentRecord);
+  } catch (err) {
+    console.error(err);
+    document.getElementById('status').textContent = 'Failed to generate PDF — see console.';
+  }
 });
 
-function generatePDF(record) {
+async function generatePDF(record) {
   const status = document.getElementById('status');
   status.textContent = 'Generating PDF…';
 
@@ -209,15 +297,65 @@ function generatePDF(record) {
   doc.setFontSize(10);
   doc.text(COMPANY_TAGLINE, LOGO_DATA_URI ? margin + 50 : margin, 52);
 
+  // ---- Image (left) + product info / price (right) row ----
   y = 100;
+  const imageBoxSize = 130;
+  const rightColX = margin + imageBoxSize + 20;
+  const rightColWidth = pageWidth - margin - rightColX;
+  let rowBottom = y + imageBoxSize; // default height if no image
+
+  if (currentImageDataUrl) {
+    try {
+      const dims = await getImageDimensions(currentImageDataUrl);
+      const scale = Math.min(imageBoxSize / dims.width, imageBoxSize / dims.height);
+      const w = dims.width * scale;
+      const h = dims.height * scale;
+      const imgX = margin + (imageBoxSize - w) / 2;
+      const imgY = y + (imageBoxSize - h) / 2;
+      doc.setDrawColor(230, 230, 230);
+      doc.rect(margin, y, imageBoxSize, imageBoxSize); // light border box
+      doc.addImage(currentImageDataUrl, formatFromDataUrl(currentImageDataUrl), imgX, imgY, w, h);
+    } catch (err) {
+      console.error('Could not embed product image:', err);
+    }
+  } else {
+    doc.setDrawColor(230, 230, 230);
+    doc.setFillColor(250, 250, 250);
+    doc.roundedRect(margin, y, imageBoxSize, imageBoxSize, 4, 4, 'FD');
+    doc.setFontSize(9);
+    doc.setTextColor(170, 170, 170);
+    doc.text('No image', margin + imageBoxSize / 2, y + imageBoxSize / 2, { align: 'center' });
+  }
+
+  // Right column: name / ID / category / line
+  let ry = y + 4;
   doc.setTextColor(30, 30, 30);
   doc.setFontSize(16);
-  doc.text(record.Product_Name || '(unnamed product)', margin, y);
-  y += 16;
+  const nameLines = doc.splitTextToSize(record.Product_Name || '(unnamed product)', rightColWidth);
+  doc.text(nameLines, rightColX, ry + 14);
+  ry += nameLines.length * 18 + 6;
+
   doc.setFontSize(10);
   doc.setTextColor(100, 100, 100);
-  doc.text(`Product ID: ${record.Product_ID || ''}   |   Category: ${record.Category || '—'}   |   Line: ${record.Product_Line || '—'}`, margin, y);
-  y += 20;
+  doc.text(`Product ID: ${record.Product_ID || ''}`, rightColX, ry);
+  ry += 14;
+  doc.text(`Category: ${record.Category || '—'}   |   Line: ${record.Product_Line || '—'}`, rightColX, ry);
+  ry += 20;
+
+  // Selling price highlight box, to the right of the image
+  const priceBoxHeight = 46;
+  doc.setFillColor(217, 140, 21); // --brand-accent
+  doc.roundedRect(rightColX, ry, rightColWidth, priceBoxHeight, 4, 4, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(11);
+  doc.text('Selling Price', rightColX + 12, ry + 18);
+  doc.setFontSize(18);
+  const priceText = money(record.Selling_Price);
+  doc.text(priceText, rightColX + rightColWidth - 12 - doc.getTextWidth(priceText), ry + 32);
+  ry += priceBoxHeight;
+
+  rowBottom = Math.max(rowBottom, ry);
+  y = rowBottom + 20;
 
   if (record.Description) {
     doc.setTextColor(30, 30, 30);
@@ -270,16 +408,6 @@ function generatePDF(record) {
     columnStyles: { 1: { halign: 'right' } },
   });
   y = doc.lastAutoTable.finalY + 10;
-
-  // Selling price highlight box
-  doc.setFillColor(217, 140, 21); // --brand-accent
-  doc.roundedRect(margin, y, pageWidth - margin * 2, 40, 4, 4, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(12);
-  doc.text('Selling Price', margin + 12, y + 25);
-  doc.setFontSize(16);
-  const priceText = money(record.Selling_Price);
-  doc.text(priceText, pageWidth - margin - 12 - doc.getTextWidth(priceText), y + 27);
 
   const fileName = `${record.Product_ID || 'product'}-quote.pdf`;
   doc.save(fileName);
