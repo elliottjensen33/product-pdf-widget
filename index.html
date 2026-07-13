@@ -68,10 +68,22 @@
   button:disabled { background: #aaa; cursor: default; }
   #status { margin-top: 10px; color: #666; font-size: 12px; }
   #empty { color: #888; padding: 20px 0; }
+  #debug-banner {
+    display: none;
+    background: #fdecea;
+    color: #611a15;
+    border: 1px solid #f5c6cb;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    margin-bottom: 12px;
+    white-space: pre-wrap;
+  }
 </style>
 </head>
 <body>
 
+<div id="debug-banner"></div>
 <div id="empty">Select a row in the Products table to preview it here.</div>
 <div id="content" style="display:none">
   <div class="top-section">
@@ -110,7 +122,7 @@
 </div>
 
 <script>
-const COMPANY_NAME = "Coriander Design";
+const COMPANY_NAME = "Your Company Name";
 const COMPANY_TAGLINE = "Pricing Quote / Spec Sheet";
 // Optional: base64 logo data URI, e.g. "data:image/png;base64,iVBORw0..."
 const LOGO_DATA_URI = null;
@@ -176,6 +188,16 @@ function formatFromDataUrl(dataUrl) {
 }
 
 let currentImageDataUrl = null; // cached for the currently selected record, used by both preview and PDF
+
+function showDebug(message) {
+  const banner = document.getElementById('debug-banner');
+  banner.textContent = message;
+  banner.style.display = 'block';
+  console.error(message);
+}
+
+window.addEventListener('error', (e) => showDebug(`Script error: ${e.message}`));
+window.addEventListener('unhandledrejection', (e) => showDebug(`Unhandled error: ${e.reason?.message || e.reason}`));
 
 async function loadRelatedData(record) {
   const [pmData, plData, matData, laborRateData] = await Promise.all([
@@ -254,15 +276,21 @@ async function loadProductImage(record) {
     currentImageDataUrl = dataUrl;
     wrap.innerHTML = `<img src="${dataUrl}" alt="Product image" />`;
   } catch (err) {
-    console.error(err);
+    showDebug(`Image load failed: ${err.message}`);
     wrap.innerHTML = '<div class="no-image">Image failed to load</div>';
   }
 }
 
 grist.onRecord(async (record) => {
-  currentRecord = record;
-  await Promise.all([loadRelatedData(record), loadProductImage(record)]);
-  renderPreview(record);
+  try {
+    currentRecord = record;
+    console.log('Selected record:', record);
+    console.log('record.Image raw value:', record.Image);
+    await Promise.all([loadRelatedData(record), loadProductImage(record)]);
+    renderPreview(record);
+  } catch (err) {
+    showDebug(`Error loading record: ${err.message}`);
+  }
 });
 
 document.getElementById('export-btn').addEventListener('click', async () => {
