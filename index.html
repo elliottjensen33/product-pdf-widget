@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Product PDF Export</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  /* ---------- BRANDING: edit these to match your company ---------- */
+  :root {
+    --brand-primary: #1c3d5a;
+    --brand-accent:  #d98c15;
+    --brand-text:    #222;
+  }
+  /* ------------------------------------------------------------------ */
+
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    margin: 0;
+    padding: 16px;
+    color: var(--brand-text);
+    font-size: 14px;
+  }
+  h2 { margin: 0 0 4px 0; color: var(--brand-primary); }
+  .sub { color: #666; margin-bottom: 16px; }
+  .row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #eee; }
+  .row span:first-child { color: #666; }
+  .section-title { margin-top: 16px; font-weight: 600; color: var(--brand-primary); }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #eee; }
+  th { color: #666; font-weight: 500; }
+  td.num, th.num { text-align: right; }
+  button {
+    margin-top: 20px;
+    background: var(--brand-primary);
+    color: white;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:disabled { background: #aaa; cursor: default; }
+  #status { margin-top: 10px; color: #666; font-size: 12px; }
+  #empty { color: #888; padding: 20px 0; }
+</style>
+</head>
+<body>
+
+<div id="empty">Select a row in the Products table to preview it here.</div>
+<div id="content" style="display:none">
+  <h2 id="p-name"></h2>
+  <div class="sub" id="p-id"></div>
+
+  <div class="row"><span>Category</span><span id="p-category"></span></div>
+  <div class="row"><span>Product Line</span><span id="p-line"></span></div>
+  <div class="row"><span>Status</span><span id="p-status"></span></div>
+  <div class="row"><span>Description</span><span id="p-desc"></span></div>
+
+  <div class="section-title">Materials</div>
+  <table id="materials-table"><thead>
+    <tr><th>Material</th><th class="num">Qty</th><th class="num">Unit Cost</th><th class="num">Ext. Cost</th></tr>
+  </thead><tbody></tbody></table>
+
+  <div class="section-title">Labor</div>
+  <table id="labor-table"><thead>
+    <tr><th>Category</th><th class="num">Hours</th><th class="num">Rate/hr</th><th class="num">Ext. Cost</th></tr>
+  </thead><tbody></tbody></table>
+
+  <div class="section-title">Cost Summary</div>
+  <div class="row"><span>Total Material Cost</span><span id="p-matcost"></span></div>
+  <div class="row"><span>Total Labor Cost</span><span id="p-labcost"></span></div>
+  <div class="row"><span>Overhead</span><span id="p-oh"></span></div>
+  <div class="row"><span><strong>Total Cost</strong></span><span id="p-totcost"></span></div>
+  <div class="row"><span><strong>Selling Price</strong></span><span id="p-price"></span></div>
+  <div class="row"><span>Gross Margin %</span><span id="p-margin"></span></div>
+
+  <button id="export-btn">Export Branded PDF</button>
+  <div id="status"></div>
+</div>
+
+<script>
+const COMPANY_NAME = "Your Company Name";
+const COMPANY_TAGLINE = "Pricing Quote / Spec Sheet";
+// Optional: base64 logo data URI, e.g. "data:image/png;base64,iVBORw0..."
+const LOGO_DATA_URI = null;
+
+let currentRecord = null;
+let materialsRows = [];
+let laborRows = [];
+
+grist.ready({
+  requiredAccess: 'full',   // needed to read Product_Materials / Product_Labor / Materials / Labor_Rates
+  columns: [] // not restricting to a mapped subset; we read the raw record
+});
+
+// Converts Grist's column-oriented fetchTable result into an array of row objects
+function toRows(colData) {
+  const ids = colData.id;
+  const rows = [];
+  for (let i = 0; i < ids.length; i++) {
+    const row = { id: ids[i] };
+    for (const col of Object.keys(colData)) {
+      row[col] = colData[col][i];
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+function money(n) {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  return "$" + Number(n).toFixed(2);
+}
+
+async function loadRelatedData(record) {
+  const [pmData, plData, matData, laborRateData] = await Promise.all([
+    grist.docApi.fetchTable('Product_Materials'),
+    grist.docApi.fetchTable('Product_Labor'),
+    grist.docApi.fetchTable('Materials'),
+    grist.docApi.fetchTable('Labor_Rates'),
+  ]);
+
+  const materials = toRows(matData);
+  const laborRates = toRows(laborRateData);
+  const matById = Object.fromEntries(materials.map(m => [m.id, m]));
+  const laborById = Object.fromEntries(laborRates.map(l => [l.id, l]));
+
+  const pm = toRows(pmData).filter(r => r.Product_ID === record.id);
+  const pl = toRows(plData).filter(r => r.Product_ID === record.id);
+
+  materialsRows = pm.map(r => ({
+    name: matById[r.Material_Name] ? matById[r.Material_Name].Material_Name : `#${r.Material_Name}`,
+    qty: r.Quantity,
+    unitCost: r.Unit_Cost,
+    extCost: r.Extended_Cost,
+  }));
+
+  laborRows = pl.map(r => ({
+    category: laborById[r.Labor_Category] ? laborById[r.Labor_Category].Labor_Category : `#${r.Labor_Category}`,
+    hours: r.Hours,
+    rate: r.Rate_Per_Hour,
+    extCost: r.Extended_Cost,
+  }));
+}
+
+function renderPreview(record) {
+  document.getElementById('empty').style.display = 'none';
+  document.getElementById('content').style.display = 'block';
+
+  document.getElementById('p-name').textContent = record.Product_Name || '(unnamed product)';
+  document.getElementById('p-id').textContent = record.Product_ID || '';
+  document.getElementById('p-category').textContent = record.Category || '—';
+  document.getElementById('p-line').textContent = record.Product_Line || '—';
+  document.getElementById('p-status').textContent = record.Status || '—';
+  document.getElementById('p-desc').textContent = record.Description || '—';
+
+  document.getElementById('p-matcost').textContent = money(record.Total_Material_Cost);
+  document.getElementById('p-labcost').textContent = money(record.Total_Labor_Cost);
+  document.getElementById('p-oh').textContent = money(record.Overhead_Cost);
+  document.getElementById('p-totcost').textContent = money(record.Total_Cost);
+  document.getElementById('p-price').textContent = money(record.Selling_Price);
+  document.getElementById('p-margin').textContent =
+    (record.Gross_Margin__ !== null && record.Gross_Margin__ !== undefined)
+      ? (Number(record.Gross_Margin__) * 100).toFixed(1) + "%" : "—";
+
+  const matBody = document.querySelector('#materials-table tbody');
+  matBody.innerHTML = materialsRows.map(m =>
+    `<tr><td>${m.name}</td><td class="num">${m.qty ?? ''}</td><td class="num">${money(m.unitCost)}</td><td class="num">${money(m.extCost)}</td></tr>`
+  ).join('') || '<tr><td colspan="4" style="color:#999">No materials</td></tr>';
+
+  const labBody = document.querySelector('#labor-table tbody');
+  labBody.innerHTML = laborRows.map(l =>
+    `<tr><td>${l.category}</td><td class="num">${l.hours ?? ''}</td><td class="num">${money(l.rate)}</td><td class="num">${money(l.extCost)}</td></tr>`
+  ).join('') || '<tr><td colspan="4" style="color:#999">No labor</td></tr>';
+}
+
+grist.onRecord(async (record) => {
+  currentRecord = record;
+  await loadRelatedData(record);
+  renderPreview(record);
+});
+
+document.getElementById('export-btn').addEventListener('click', () => {
+  if (!currentRecord) return;
+  generatePDF(currentRecord);
+});
+
+function generatePDF(record) {
+  const status = document.getElementById('status');
+  status.textContent = 'Generating PDF…';
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 40;
+  let y = 50;
+
+  // Header band
+  doc.setFillColor(28, 61, 90); // matches --brand-primary
+  doc.rect(0, 0, pageWidth, 70, 'F');
+  if (LOGO_DATA_URI) {
+    doc.addImage(LOGO_DATA_URI, 'PNG', margin, 15, 40, 40);
+  }
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(18);
+  doc.text(COMPANY_NAME, LOGO_DATA_URI ? margin + 50 : margin, 35);
+  doc.setFontSize(10);
+  doc.text(COMPANY_TAGLINE, LOGO_DATA_URI ? margin + 50 : margin, 52);
+
+  y = 100;
+  doc.setTextColor(30, 30, 30);
+  doc.setFontSize(16);
+  doc.text(record.Product_Name || '(unnamed product)', margin, y);
+  y += 16;
+  doc.setFontSize(10);
+  doc.setTextColor(100, 100, 100);
+  doc.text(`Product ID: ${record.Product_ID || ''}   |   Category: ${record.Category || '—'}   |   Line: ${record.Product_Line || '—'}`, margin, y);
+  y += 20;
+
+  if (record.Description) {
+    doc.setTextColor(30, 30, 30);
+    doc.setFontSize(10);
+    const lines = doc.splitTextToSize(record.Description, pageWidth - margin * 2);
+    doc.text(lines, margin, y);
+    y += lines.length * 12 + 10;
+  }
+
+  if (materialsRows.length) {
+    doc.autoTable({
+      startY: y,
+      margin: { left: margin, right: margin },
+      head: [['Material', 'Qty', 'Unit Cost', 'Ext. Cost']],
+      body: materialsRows.map(m => [m.name, String(m.qty ?? ''), money(m.unitCost), money(m.extCost)]),
+      headStyles: { fillColor: [28, 61, 90] },
+      styles: { fontSize: 9 },
+      theme: 'grid',
+    });
+    y = doc.lastAutoTable.finalY + 16;
+  }
+
+  if (laborRows.length) {
+    doc.autoTable({
+      startY: y,
+      margin: { left: margin, right: margin },
+      head: [['Labor Category', 'Hours', 'Rate/hr', 'Ext. Cost']],
+      body: laborRows.map(l => [l.category, String(l.hours ?? ''), money(l.rate), money(l.extCost)]),
+      headStyles: { fillColor: [28, 61, 90] },
+      styles: { fontSize: 9 },
+      theme: 'grid',
+    });
+    y = doc.lastAutoTable.finalY + 20;
+  }
+
+  // Cost summary block
+  doc.setFontSize(11);
+  const summary = [
+    ['Total Material Cost', money(record.Total_Material_Cost)],
+    ['Total Labor Cost', money(record.Total_Labor_Cost)],
+    ['Overhead', money(record.Overhead_Cost)],
+    ['Total Cost', money(record.Total_Cost)],
+  ];
+  doc.autoTable({
+    startY: y,
+    margin: { left: margin, right: margin },
+    body: summary,
+    theme: 'plain',
+    styles: { fontSize: 10 },
+    columnStyles: { 1: { halign: 'right' } },
+  });
+  y = doc.lastAutoTable.finalY + 10;
+
+  // Selling price highlight box
+  doc.setFillColor(217, 140, 21); // --brand-accent
+  doc.roundedRect(margin, y, pageWidth - margin * 2, 40, 4, 4, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(12);
+  doc.text('Selling Price', margin + 12, y + 25);
+  doc.setFontSize(16);
+  const priceText = money(record.Selling_Price);
+  doc.text(priceText, pageWidth - margin - 12 - doc.getTextWidth(priceText), y + 27);
+
+  const fileName = `${record.Product_ID || 'product'}-quote.pdf`;
+  doc.save(fileName);
+  status.textContent = `Saved ${fileName}`;
+}
+</script>
+</body>
+</html>
