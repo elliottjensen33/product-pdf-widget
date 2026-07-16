@@ -103,7 +103,7 @@
       <h2 id="p-name"></h2>
       <div class="sub" id="p-id"></div>
       <div class="row"><span>Category</span><span id="p-category"></span></div>
-      <div class="row"><span>Product Line</span><span id="p-line"></span></div>
+      <div class="row"><span>Product Type</span><span id="p-line"></span></div>
       <div class="row"><span>Status</span><span id="p-status"></span></div>
     </div>
   </div>
@@ -274,7 +274,7 @@ function renderPreview(record) {
   document.getElementById('p-name').textContent = record.Product_Name || '(unnamed product)';
   document.getElementById('p-id').textContent = record.Product_ID || '';
   document.getElementById('p-category').textContent = record.Category || '—';
-  document.getElementById('p-line').textContent = record.Product_Line || '—';
+  document.getElementById('p-line').textContent = record.Product_Type || '—';
   document.getElementById('p-status').textContent = record.Status || '—';
   document.getElementById('p-desc').textContent = record.Description || '—';
 
@@ -431,7 +431,7 @@ async function generatePDF(record) {
   doc.setTextColor(100, 100, 100);
   doc.text(`Product ID: ${record.Product_ID || ''}`, rightColX, ry);
   ry += 14;
-  doc.text(`Category: ${record.Category || '—'}   |   Line: ${record.Product_Line || '—'}`, rightColX, ry);
+  doc.text(`Category: ${record.Category || '—'}   |   Type: ${record.Product_Type || '—'}`, rightColX, ry);
   ry += 20;
 
   // Selling price highlight box, to the right of the image
